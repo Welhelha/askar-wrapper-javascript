@@ -1,4 +1,4 @@
-import { Jwk, Key, KeyAlgorithm, NativeAskar } from '@openwallet-foundation/askar-shared'
+import { Jwk, Key, KeyAlgorithm, NativeAskar, SignatureAlgorithm } from '@openwallet-foundation/askar-shared'
 import { describe, expect, test } from 'vitest'
 import { utf8 } from './utils'
 
@@ -139,4 +139,55 @@ describe('keys', () => {
 
     key.handle.free()
   })
+
+  for (const [algorithm, sigType, jwkAlgorithm] of [
+    [KeyAlgorithm.MlDsa44, SignatureAlgorithm.MlDsa44, 'ML-DSA-44'],
+    [KeyAlgorithm.MlDsa65, SignatureAlgorithm.MlDsa65, 'ML-DSA-65'],
+    [KeyAlgorithm.MlDsa87, SignatureAlgorithm.MlDsa87, 'ML-DSA-87'],
+  ] as const) {
+    test(`mldsa ${jwkAlgorithm}`, () => {
+      const key = Key.generate(algorithm)
+      const message = utf8('ML-DSA test message')
+      const signature = key.signMessage({ message, sigType })
+      const alteredSignature = signature.slice()
+      alteredSignature[0] ^= 1
+      const seed = Uint8Array.from({ length: 32 }, (_, index) => index)
+      const publicKey = Key.fromPublicBytes({ algorithm, publicKey: key.publicBytes })
+      const seedKey = Key.fromSecretBytes({ algorithm, secretKey: key.secretBytes })
+      const generatedFromSeed = Key.fromSeed({ algorithm, seed })
+      const repeatedSeedKey = Key.fromSeed({ algorithm, seed })
+      const publicJwk = key.jwkPublic
+      const secretJwk = key.jwkSecret
+      const publicJwkKey = Key.fromJwk({ jwk: publicJwk })
+      const secretJwkKey = Key.fromJwk({ jwk: secretJwk })
+      const generatedFromSeedJwkKey = Key.fromJwk({ jwk: generatedFromSeed.jwkSecret })
+      const createdKeys = [
+        key,
+        publicKey,
+        seedKey,
+        generatedFromSeed,
+        repeatedSeedKey,
+        generatedFromSeedJwkKey,
+        publicJwkKey,
+        secretJwkKey,
+      ]
+
+      try {
+        expect(key.algorithm).toBe(algorithm)
+        expect(key.secretBytes.length).toBe(32)
+        expect(publicKey.verifySignature({ message, signature, sigType })).toBe(true)
+        expect(key.verifySignature({ message: utf8('different message'), signature, sigType })).toBe(false)
+        expect(key.verifySignature({ message, signature: alteredSignature, sigType })).toBe(false)
+        expect(seedKey.publicBytes).toEqual(key.publicBytes)
+        expect(generatedFromSeed.publicBytes).toEqual(repeatedSeedKey.publicBytes)
+        expect(generatedFromSeedJwkKey.publicBytes).toEqual(generatedFromSeed.publicBytes)
+        expect(publicJwk).toEqual(expect.objectContaining({ alg: jwkAlgorithm, kty: 'AKP' }))
+        expect(secretJwk).toEqual(expect.objectContaining({ alg: jwkAlgorithm, kty: 'AKP' }))
+        expect(publicJwkKey.publicBytes).toEqual(key.publicBytes)
+        expect(secretJwkKey.publicBytes).toEqual(key.publicBytes)
+      } finally {
+        for (const createdKey of createdKeys) createdKey.handle.free()
+      }
+    })
+  }
 })
